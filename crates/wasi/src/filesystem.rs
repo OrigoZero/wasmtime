@@ -106,6 +106,12 @@ bitflags::bitflags! {
         /// This directory can be mutated, for example by creating new files
         /// within it.
         const MUTATE = 0b10;
+
+        /// Every file and directory created under this directory is created
+        /// for its owner alone: files `0600`, directories `0700`, on Unix.
+        /// Elsewhere a created entry takes the access control of the
+        /// directory it is created in.
+        const OWNER_ONLY = 0b100;
     }
 }
 
@@ -844,6 +850,15 @@ impl Dir {
         if !self.perms.contains(DirPerms::MUTATE) {
             return Err(ErrorCode::NotPermitted);
         }
+        #[cfg(unix)]
+        if self.perms.contains(DirPerms::OWNER_ONLY) {
+            use cap_std::fs::DirBuilderExt;
+            let mut builder = cap_std::fs::DirBuilder::new();
+            builder.mode(0o700);
+            self.run_blocking(move |d| d.create_dir_with(&path, &builder))
+                .await?;
+            return Ok(());
+        }
         self.run_blocking(move |d| d.create_dir(&path)).await?;
         Ok(())
     }
@@ -958,6 +973,11 @@ impl Dir {
                 opts.create_new(true);
             } else {
                 opts.create(true);
+            }
+            #[cfg(unix)]
+            if self.perms.contains(DirPerms::OWNER_ONLY) {
+                use cap_std::fs::OpenOptionsExt;
+                opts.mode(0o600);
             }
             create = true;
             opts.write(true);
